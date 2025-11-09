@@ -175,13 +175,15 @@ class DexBot():
                 # Bonk tokens
                 if "bonk" in token_lower:
                     bonk_match = re.search(r'.{0,40}bonk', token, re.IGNORECASE)
+                    if bonk_match.startswith('V'):
+                        bonk_match = sol_token[1:]
                     if bonk_match:
                         extracted_tokens.append(bonk_match.group(0))
                         continue
 
                 # Solana-like addresses (last 44 chars)
                 sol_token = token[-44:]
-                if sol_token.lower().startswith('v'):
+                if sol_token.startswith('V'):
                     sol_token = sol_token[1:]
                 extracted_tokens.append(sol_token)
 
