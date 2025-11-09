@@ -141,43 +141,52 @@ class DexBot():
         # Decode the message, replacing non-printable characters with spaces
         decoded_text = ''.join(chr(b) if 32 <= b <= 126 else ' ' for b in mes)
 
-        # Split the string by whitespace into words and filter out short words
-        words = [word for word in decoded_text.split() if len(word) >= 55]
+        # Split the string by whitespace into words and filter long words
+        words = [word for word in decoded_text.split() if len(word) >= 65]
 
-        # Filter out special characters from words
-        filtered_words = [re.sub(r'["*<$@(),.].*', '', word) for word in words]
-
-        # Extract data from words
         extracted_data = []
-        for token in filtered_words:
+
+        for token in words:
             try:
-                # Check if token contains an ETH address
+                # Skip URLs or web links
+                if any(substr in token for substr in ["https", "http", "//", ".com"]):
+                    continue
+
+                # ETH addresses
                 if "0x" in token:
-                    token = re.findall(r'(0x[0-9a-fA-F]+)', token)[-1]
-                    print(token)
-                # Check if token contains 'pump' keyword
-                elif "pump" in token:
-                    token = re.findall(r".{0,40}pump", token)[0]
-                    # Remove leading 'V' if present
-                    if token.startswith("V"):
-                        token = token[1:]
+                    eth_address = re.findall(r'0x[0-9a-fA-F]{40,}', token)
+                    if eth_address:
+                        extracted_data.append(eth_address[-1])
+                        continue
 
+                # Pump tokens
+                if "pump" in token.lower():
+                    pump_match = re.search(r'.{0,40}pump', token, re.IGNORECASE)
+                    if pump_match:
+                        extracted_data.append(pump_match.group(0).lstrip('V'))
+                        continue
 
-                # Otherwise extract the last 44 characters
-                else:
-                    token = token[-44:]
+                # Bonk tokens
+                if "bonk" in token.lower():
+                    bonk_match = re.search(r'.{0,44}bonk', token, re.IGNORECASE)
+                    if bonk_match:
+                        extracted_data.append(bonk_match.group(0))
+                        continue
 
+                # Otherwise, take last 44 characters (for Solana token addresses)
+                extracted_data.append(token[-44:])
             
-                extracted_data.append(token)
             except Exception as e:
-                print(f"There is an error in the token list: {e}")
+                print(f"Error processing token '{token}': {e}")
 
-        
 
+        print("extracted")
         return extracted_data[:70]
+
 
 
     def token_getter(self, message):
         pass
+
 
 
