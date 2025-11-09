@@ -132,56 +132,68 @@ class DexBot():
         except Exception as e:
             print(f"Telegram sending error: {e}")
 
+
+
     def start(self):
+        # Run the async connection
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         mes = loop.run_until_complete(self.connect())
         loop.close()
 
-        # Decode the message, replacing non-printable characters with spaces
+        # Decode message, replacing non-printable characters with space
         decoded_text = ''.join(chr(b) if 32 <= b <= 126 else ' ' for b in mes)
 
-        # Split the string by whitespace into words and filter long words
-        words = [word for word in decoded_text.split() if len(word) >= 65]
+        # Split into long words
+        words = [w for w in decoded_text.split() if len(w) >= 65]
 
-        extracted_data = []
+
+        extracted_tokens = []
 
         for token in words:
             try:
-                # Skip URLs or web links
-                if any(substr in token for substr in ["https", "http", "//", ".com"]):
+                token_lower = token.lower()
+
+                # Skip URLs
+                if any(substr in token_lower for substr in ["https", "http", "//", ".com"]):
                     continue
 
                 # ETH addresses
-                if "0x" in token:
-                    eth_address = re.findall(r'0x[0-9a-fA-F]{40,}', token)
-                    if eth_address:
-                        extracted_data.append(eth_address[-1])
+                if "0x" in token_lower:
+                    eth_match = re.findall(r'0x[0-9a-fA-F]{40,}', token)
+                    if eth_match:
+                        extracted_tokens.append(eth_match[-1])
                         continue
 
                 # Pump tokens
-                if "pump" in token.lower():
+                if "pump" in token_lower:
                     pump_match = re.search(r'.{0,40}pump', token, re.IGNORECASE)
                     if pump_match:
-                        extracted_data.append(pump_match.group(0).lstrip('V'))
+                        extracted_tokens.append(pump_match.group(0).lstrip('V'))
                         continue
 
                 # Bonk tokens
-                if "bonk" in token.lower():
-                    bonk_match = re.search(r'.{0,44}bonk', token, re.IGNORECASE)
+                if "bonk" in token_lower:
+                    bonk_match = re.search(r'.{0,40}bonk', token, re.IGNORECASE)
                     if bonk_match:
-                        extracted_data.append(bonk_match.group(0))
+                        extracted_tokens.append(bonk_match.group(0))
                         continue
 
-                # Otherwise, take last 44 characters (for Solana token addresses)
-                extracted_data.append(token[-44:])
-            
+                # Solana-like addresses (last 44 chars)
+                sol_token = token[-44:]
+                if sol_token.lower().startswith('v'):
+                    sol_token = sol_token[1:]
+                extracted_tokens.append(sol_token)
+
             except Exception as e:
                 print(f"Error processing token '{token}': {e}")
 
 
-        print("extracted")
-        return extracted_data[:70]
+        print("Extraction complete")
+        return extracted_tokens[:70]
+
+
+
 
 
 
