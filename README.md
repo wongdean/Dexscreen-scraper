@@ -24,21 +24,31 @@ This project provides a Flask based Python script 🐍 designed to automate the 
     cd Dexscreener-scraper
     ```
 
-2.  **Install dependencies 📦:**
+2.  **Run with Docker Compose 🐳:**
 
     ```bash
-    pip install -r requirements.txt
+    docker compose up --build -d
     ```
+
+3.  **Open the app 🌐:**
+
+    `http://localhost:5000`
 
 ## Usage 🚀
 
-1.  **Run the scraper 🏃:**
+1.  **Start the service 🏃:**
 
     ```bash
-    python -m flask run
+    docker compose up -d
     ```
 
-2.  **Configuration (Optional) ⚙️:**
+2.  **Stop the service 🛑:**
+
+    ```bash
+    docker compose down
+    ```
+
+3.  **Configuration (Optional) ⚙️:**
     * Modify the `Filter` to customize the scraping parameters, such as target trading pairs 🎯, data output 📄, and WebSocket connection settings 🔌.
     * You may need to inspect the Dexscreener website 🌐 to identify the correct trading filter identifiers.
 
