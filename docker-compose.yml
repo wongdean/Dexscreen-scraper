@@ -1,0 +1,9 @@
+services:
+  dexscreener-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dexscreener-scraper
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
