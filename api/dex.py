@@ -10,6 +10,7 @@ import struct
 from decimal import Decimal, ROUND_DOWN
 import re
 import requests
+import websockets
 
 # Apply nest_asyncio
 nest_asyncio.apply()
@@ -37,11 +38,28 @@ class DexBot():
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
             "Upgrade": "websocket",
             "Origin": "https://dexscreener.com",
+            "Referer": "https://dexscreener.com/",
+            "Pragma": "no-cache",
+            "Cache-Control": "no-cache",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Dest": "websocket",
+            "Sec-Fetch-Mode": "websocket",
+            "Sec-Fetch-Site": "same-site",
             'Sec-WebSocket-Version': '13',
             "Accept-Encoding": "gzip, deflate, br, zstd",
             "Sec-WebSocket-Key": self.generate_sec_websocket_key()
         }
         return headers
+
+    def candidate_ws_urls(self):
+        # Try original endpoint first, then fallback between v5/v4.
+        urls = [self.url]
+        if "/v5/" in self.url:
+            urls.append(self.url.replace("/v5/", "/v4/"))
+        elif "/v4/" in self.url:
+            urls.append(self.url.replace("/v4/", "/v5/"))
+        # Keep order but drop duplicates.
+        return list(dict.fromkeys(urls))
 
     def format_token_data(self):
 
@@ -56,6 +74,14 @@ class DexBot():
         """
 
         token_addresses = self.start()
+        if not token_addresses:
+            return json.dumps(
+                {
+                    "data": [],
+                    "error": "No token addresses extracted. WebSocket may be blocked (403) or returned no pairs."
+                },
+                indent=2
+            )
 
         base_url = "https://api.dexscreener.com/latest/dex/tokens/"
         results = {}
@@ -88,42 +114,89 @@ class DexBot():
         return json.dumps({"data": results}, indent=2)
       
 
-    async def connect(self):
-        headers = self.get_headers()
-        try:
-            session = AsyncSession(headers=headers)
-            ws = await session.ws_connect(self.url)
-            print(self.url)
+    async def connect_with_websockets(self, ws_url, headers):
+        # `websockets` handles compressed websocket frames better than
+        # curl-cffi's ws parser for this endpoint.
+        ws_headers = {
+            "Origin": headers["Origin"],
+            "Referer": headers["Referer"],
+            "User-Agent": headers["User-Agent"],
+            "Pragma": headers["Pragma"],
+            "Cache-Control": headers["Cache-Control"],
+            "Accept-Language": headers["Accept-Language"],
+        }
 
-            # Loop to keep receiving data until the connection is closed
+        async with websockets.connect(
+            ws_url,
+            additional_headers=ws_headers,
+            open_timeout=20,
+            close_timeout=10,
+            ping_interval=20,
+            ping_timeout=20,
+            max_size=8 * 1024 * 1024,
+        ) as ws:
             while True:
+                data = await ws.recv()
+                if not data:
+                    return None
+                if "pairs" in str(data):
+                    return data
+
+    async def connect(self):
+        # Rotate impersonation and endpoint version because Dexscreener can 403
+        # specific fingerprints or websocket paths.
+        impersonations = ("chrome124", "chrome120", "safari17_0")
+        urls = self.candidate_ws_urls()
+        last_error = "Unknown websocket error"
+
+        for ws_url in urls:
+            for impersonate_name in impersonations:
+                headers = self.get_headers()
+                session = AsyncSession(headers=headers, impersonate=impersonate_name)
+                ws = None
                 try:
-                    # Receive data from WebSocket
-                    data = await ws.recv()
+                    # Warm up origin and websocket host to gather cookies.
+                    await session.get("https://dexscreener.com/")
+                    await session.get("https://io.dexscreener.com/")
 
-                    if data:
-                        response = data[0]  # Assuming the first element contains the desired message
-                        # Process and return the data or handle it as needed
-                        #print(response)  # You can replace this with your desired processing logic
+                    # Primary path: use websockets client for receiving frames.
+                    # curl-cffi may fail on reserved bits for compressed frames.
+                    try:
+                        data = await self.connect_with_websockets(ws_url, headers)
+                        if data is not None:
+                            print(f"Connected via websockets ({impersonate_name} warmup): {ws_url}")
+                            return data
+                    except Exception as ws_e:
+                        print(f"websockets client failed [{impersonate_name}] {ws_url}: {ws_e}")
+
+                    # Fallback path: curl-cffi websocket client.
+                    ws = await session.ws_connect(ws_url)
+                    print(f"Connected via curl-cffi {impersonate_name}: {ws_url}")
+
+                    while True:
+                        data = await ws.recv()
+                        if not data:
+                            print("No data received.")
+                            break
+
+                        response = data
+                        if isinstance(response, (list, tuple)) and response:
+                            response = response[0]
+
                         if "pairs" in str(response):
-                          return response
-
-                    else:
-                        # If no data is received, break out of the loop
-                        print("No data received.")
-                        break
-
+                            return response
                 except Exception as e:
-                    print(f"Error receiving message: {str(e)}")
-                    break
+                    last_error = str(e)
+                    print(f"Connection attempt failed [{impersonate_name}] {ws_url}: {last_error}")
+                finally:
+                    try:
+                        if ws is not None:
+                            await ws.close()
+                    except Exception:
+                        pass
+                    await session.close()
 
-            # Closing the WebSocket and session after the loop ends
-            await ws.close()
-            await session.close()
-
-        except Exception as e:
-            print(f"Connection error: {str(e)}")
-            return f"Connection error: {str(e)}"
+        return f"Connection error: {last_error}"
 
 
     def tg_send(self, message):
@@ -141,8 +214,17 @@ class DexBot():
         mes = loop.run_until_complete(self.connect())
         loop.close()
 
-        # Decode message, replacing non-printable characters with space
-        decoded_text = ''.join(chr(b) if 32 <= b <= 126 else ' ' for b in mes)
+        # Normalize websocket payload to text.
+        # `ws.recv()` may yield bytes in some cases and str in others.
+        if mes is None:
+            return []
+        if isinstance(mes, (bytes, bytearray)):
+            raw_text = mes.decode("utf-8", errors="ignore")
+        else:
+            raw_text = str(mes)
+
+        # Replace non-printable chars with spaces to simplify token extraction.
+        decoded_text = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in raw_text)
 
         # Split into long words
         words = [w for w in decoded_text.split() if len(w) >= 65]
@@ -175,10 +257,11 @@ class DexBot():
                 # Bonk tokens
                 if "bonk" in token_lower:
                     bonk_match = re.search(r'.{0,40}bonk', token, re.IGNORECASE)
-                    if bonk_match.startswith('V'):
-                        bonk_match = sol_token[1:]
                     if bonk_match:
-                        extracted_tokens.append(bonk_match.group(0))
+                        bonk_token = bonk_match.group(0)
+                        if bonk_token.startswith('V'):
+                            bonk_token = bonk_token[1:]
+                        extracted_tokens.append(bonk_token)
                         continue
 
                 # Solana-like addresses (last 44 chars)
